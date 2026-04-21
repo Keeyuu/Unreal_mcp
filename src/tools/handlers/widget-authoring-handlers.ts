@@ -51,6 +51,63 @@ function normalizePathFields(args: Record<string, unknown>, fields: string[]): R
   return result;
 }
 
+// Actions whose `name` / `widgetName` carry distinct semantics and must not be
+// folded into `slotName`:
+//   - create_widget_blueprint + the five `create_*` template actions: `name`
+//     is the blueprint asset name.
+//   - add_widget / remove_widget: `widgetName` is read directly by the C++
+//     HandleAddWidget / HandleRemoveWidget handlers (see commit 74399c9).
+const SLOT_NAME_NORMALIZATION_EXCLUDED = new Set<string>([
+  'create_widget_blueprint',
+  'create_settings_menu',
+  'create_loading_screen',
+  'create_inventory_ui',
+  'create_dialog_widget',
+  'create_radial_menu',
+  'add_widget',
+  'remove_widget',
+]);
+
+/**
+ * Fold `name` / `widgetName` into `slotName` for every action whose C++
+ * handler reads `slotName` (i.e. every `add_*` / `set_*` / `bind_*` except the
+ * ones in SLOT_NAME_NORMALIZATION_EXCLUDED).
+ *
+ * Precedence when multiple are set: slotName > widgetName > name.
+ * Conflict (distinct non-empty values) emits a stderr warning but never
+ * throws — keeps older callers that relied on the silent default working.
+ */
+function normalizeSlotNameField(
+  action: string,
+  args: Record<string, unknown>
+): Record<string, unknown> {
+  if (SLOT_NAME_NORMALIZATION_EXCLUDED.has(action)) return args;
+
+  const pickStr = (v: unknown): string | undefined =>
+    typeof v === 'string' && v.length > 0 ? v : undefined;
+
+  const slotName = pickStr(args.slotName);
+  const widgetName = pickStr(args.widgetName);
+  const name = pickStr(args.name);
+
+  const distinct = new Set([slotName, widgetName, name].filter((v): v is string => !!v));
+  if (distinct.size > 1) {
+    const provided: string[] = [];
+    if (slotName !== undefined) provided.push(`slotName="${slotName}"`);
+    if (widgetName !== undefined) provided.push(`widgetName="${widgetName}"`);
+    if (name !== undefined) provided.push(`name="${name}"`);
+    process.stderr.write(
+      `[manage_widget_authoring:${action}] conflicting name fields (${provided.join(', ')}); ` +
+      `applying precedence slotName > widgetName > name\n`
+    );
+  }
+
+  const resolved = slotName ?? widgetName ?? name;
+  if (resolved === undefined || resolved === args.slotName) return args;
+
+  return { ...args, slotName: resolved };
+}
+
 /**
  * Handles all widget authoring actions for the manage_widget_authoring tool.
  */
@@ -60,7 +117,11 @@ export async function handleWidgetAuthoringTools(
   tools: ITools
 ): Promise<Record<string, unknown>> {
   // Normalize path fields before processing
-  const argsRecord = normalizePathFields(args as Record<string, unknown>, ['widgetPath', 'folder', 'path', 'widgetBlueprintPath']);
+  const pathNormalized = normalizePathFields(args as Record<string, unknown>, ['widgetPath', 'folder', 'path', 'widgetBlueprintPath']);
+  // Fold `name` / `widgetName` into `slotName` for actions whose C++ handlers read slotName.
+  // Must run BEFORE the `requireNonEmptyString('slotName', ...)` checks below so that
+  // callers passing only `name` still pass validation.
+  const argsRecord = normalizeSlotNameField(action, pathNormalized);
   const timeoutMs = getTimeoutMs();
 
   // All actions are dispatched to C++ via automation bridge

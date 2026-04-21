@@ -102,3 +102,127 @@ describe('widget-authoring: remove_widget', () => {
   });
 });
 
+describe('widget-authoring: slotName normalization', () => {
+  beforeEach(() => executeAutomationRequestMock.mockClear());
+
+  const getPayload = () => {
+    const callArgs = executeAutomationRequestMock.mock.calls[0] as unknown[];
+    return callArgs[2] as Record<string, unknown>;
+  };
+
+  it('add_image: maps `name` into slotName (C++ reads slotName only)', async () => {
+    await handleWidgetAuthoringTools(
+      'add_image',
+      { widgetPath: '/Game/UI/WBP_HUD', name: 'ImgBG' },
+      {} as never
+    );
+    expect(getPayload().slotName).toBe('ImgBG');
+  });
+
+  it('add_image: maps `widgetName` into slotName', async () => {
+    await handleWidgetAuthoringTools(
+      'add_image',
+      { widgetPath: '/Game/UI/WBP_HUD', widgetName: 'ImgBG' },
+      {} as never
+    );
+    expect(getPayload().slotName).toBe('ImgBG');
+  });
+
+  it('add_image: explicit slotName wins over widgetName and name', async () => {
+    await handleWidgetAuthoringTools(
+      'add_image',
+      {
+        widgetPath: '/Game/UI/WBP_HUD',
+        slotName: 'FromSlot',
+        widgetName: 'FromWidgetName',
+        name: 'FromName'
+      },
+      {} as never
+    );
+    expect(getPayload().slotName).toBe('FromSlot');
+  });
+
+  it('add_image: warns to stderr when multiple name fields have different values', async () => {
+    const writeSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      await handleWidgetAuthoringTools(
+        'add_image',
+        {
+          widgetPath: '/Game/UI/WBP_HUD',
+          slotName: 'FromSlot',
+          name: 'FromName'
+        },
+        {} as never
+      );
+      const calls = writeSpy.mock.calls.map(c => String(c[0]));
+      expect(calls.some(msg =>
+        msg.includes('add_image') && msg.includes('slotName') && msg.includes('name')
+      )).toBe(true);
+    } finally {
+      writeSpy.mockRestore();
+    }
+  });
+
+  it('add_image: no warning when only one name field is provided', async () => {
+    const writeSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      await handleWidgetAuthoringTools(
+        'add_image',
+        { widgetPath: '/Game/UI/WBP_HUD', name: 'ImgBG' },
+        {} as never
+      );
+      const calls = writeSpy.mock.calls.map(c => String(c[0]));
+      expect(calls.some(msg => msg.includes('manage_widget_authoring'))).toBe(false);
+    } finally {
+      writeSpy.mockRestore();
+    }
+  });
+
+  it('set_anchor: requireNonEmptyString(slotName) passes after normalization from name', async () => {
+    const res = await handleWidgetAuthoringTools(
+      'set_anchor',
+      { widgetPath: '/Game/UI/WBP_HUD', name: 'ImgBG' },
+      {} as never
+    );
+    expect((res as { success?: unknown }).success).toBe(true);
+    expect(getPayload().slotName).toBe('ImgBG');
+  });
+
+  it('create_widget_blueprint: `name` is NOT normalized into slotName (preserves asset-name semantics)', async () => {
+    await handleWidgetAuthoringTools(
+      'create_widget_blueprint',
+      { name: 'WBP_Foo', folder: '/Game/UI' },
+      {} as never
+    );
+    const payload = getPayload();
+    expect(payload.name).toBe('WBP_Foo');
+    expect(payload.slotName).toBeUndefined();
+  });
+
+  it('add_widget: `widgetName` is preserved and NOT copied into slotName (C++ reads widgetName)', async () => {
+    await handleWidgetAuthoringTools(
+      'add_widget',
+      {
+        widgetBlueprintPath: '/Game/UI/WBP_Parent',
+        parentWidgetName: 'RootCanvas',
+        widgetClass: '/Game/UI/WBP_HealthBar.WBP_HealthBar_C',
+        widgetName: 'ChildInstance'
+      },
+      {} as never
+    );
+    const payload = getPayload();
+    expect(payload.widgetName).toBe('ChildInstance');
+    expect(payload.slotName).toBeUndefined();
+  });
+
+  it('remove_widget: `widgetName` is preserved and NOT copied into slotName', async () => {
+    await handleWidgetAuthoringTools(
+      'remove_widget',
+      { widgetBlueprintPath: '/Game/UI/WBP_Parent', widgetName: 'ChildInstance' },
+      {} as never
+    );
+    const payload = getPayload();
+    expect(payload.widgetName).toBe('ChildInstance');
+    expect(payload.slotName).toBeUndefined();
+  });
+});
