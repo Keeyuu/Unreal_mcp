@@ -160,7 +160,11 @@ FString ValidateAssetPath(const FString& Path)
 #if WITH_EDITOR
 AActor* FindActorByName(const FString& ActorName, bool bExactMatch)
 {
-    UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+    UWorld* World = nullptr;
+    if (GEditor)
+    {
+        World = GEditor->PlayWorld ? GEditor->PlayWorld.Get() : GEditor->GetEditorWorldContext().World();
+    }
     if (!World)
     {
         return nullptr;
@@ -416,7 +420,7 @@ UObject* ResolveObjectFromPath(const FString& ObjectPath, FString* OutResolvedPa
     // Try to find by actor label (display name) as fallback
     if (GEditor)
     {
-        UWorld* World = GEditor->GetEditorWorldContext().World();
+        UWorld* World = GEditor->PlayWorld ? GEditor->PlayWorld.Get() : GEditor->GetEditorWorldContext().World();
         if (World)
         {
             for (TActorIterator<AActor> It(World); It; ++It)
